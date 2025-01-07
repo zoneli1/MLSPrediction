@@ -1,0 +1,955 @@
+---
+title: "MLS Regular Season Goals - Regression"
+author: "Moazzam Ali, Agha Yusuf Khan, Wesley Gao, Zeyu Wang, Zone Li"
+date: "2024-11-24"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library (tidyverse)
+library(readr)
+master <- read_csv("master_mls_data.csv")
+
+# Remove the first column (similar to iloc[:, 1:])
+master <- master[, -1]
+
+# Define the columns to drop
+dropped_columns <- c('Round', 'Result', 'Date', 'Team', 'Opponent', 'Time', 
+                     'Attendance', 'Referee', 'Captain', 'Formation', 'Opp Formation')
+
+# Drop the specified columns
+master2 <- master[, !(colnames(master) %in% dropped_columns)]
+
+master2[is.na(master2)] <- 0 #only 3 columns with NA -> based on analysis, we can safely impute 0 for these values.
+
+head(master2)
+```
+
+
+```{r}
+# Checking Correlations
+test2 <- dplyr::select(master, where(is.numeric))
+
+threshold <- 0.5
+
+high_corr2 <- which(cor(test2) > threshold & lower.tri(cor(test2)), arr.ind = TRUE)
+
+# Display the variable pairs and their correlation values
+results2 <- data.frame(
+  Var1 = rownames(cor(test2))[high_corr2[, 1]],
+  Var2 = colnames(cor(test2))[high_corr2[, 2]],
+  Correlation = cor(test2)[high_corr2]
+)
+
+# Check the correlations in descending 
+results2 %>% arrange(desc(Correlation))
+```
+
+
+```{r}
+#print(names(master2))
+
+# Drop the variables from the Goals and Shot Creation Table as they are derived variables
+# and highly correlated with other raw statistics
+vars_to_drop <- c(
+  "opp_keeper_GA.1", "shoot_xG", "poss_Poss", "passtype_Off",
+  "passtype_Crs", "passtype_Cmp", "passtype_Att", "opp_def_Lost",
+  "opp_def_Tkl.1", "opp_keeper_PKA", "poss_Live", "poss_Rec",
+  "poss_PrgR", "passtype_Live", "opp_keeper_PKatt", "opp_keeper_SoTA",
+  "shoot_Gls", "pass_Ast", "shoot_G/SoT", "shoot_G/Sh", "opp_keeper_CS", "shoot_PK",
+  "g&s_SCA", 
+  "g&s_PassLive", 
+  "g&s_PassDead", 
+  "g&s_TO", 
+  "g&s_Sh", 
+  "g&s_Fld", 
+  "g&s_Def", 
+  "g&s_GCA", 
+  "g&s_PassLive.1", 
+  "g&s_PassDead.1", 
+  "g&s_TO.1", 
+  "g&s_Sh.1", 
+  "g&s_Fld.1", 
+  "g&s_Def.1",
+  'pass_Cmp.1',
+  'poss_Rec',
+  "pass_Cmp",
+  "pass_Cmp.1",
+  "pass_Cmp.2",
+  "pass_Cmp.3",
+  "poss_Succ%",
+  "shoot_SoT",
+  "poss_Tkld%",
+  "opp_keeper_Stp%",
+  "opp_def_Tkl%",
+  "opp_keeper_Saves",
+  "opp_keeper_PKm",
+  "opp_keeper_PKsv",
+  'poss_Live',
+  'poss_Rec',
+  'passtype_Cmp',
+  'passtype_Live'
+)
+
+# # Drop the variable from list above
+# master2 <- master2[, !(colnames(master2) %in% vars_to_drop)]
+# 
+# # Drop the xG and xA derived variable as well
+master2 <- master2[, !grepl("xG", colnames(master2))]
+master2 <- master2[, !grepl("xA", colnames(master2))]
+# 
+# # Drop other highly correlated variable
+# vars_to_drop <- c(
+#   'poss_Live',
+#   'poss_Rec',
+#   'passtype_Cmp',
+#   'passtype_Live'
+# )
+# 
+# # Drop the variables
+# master2 <- master2[, !(colnames(master2) %in% vars_to_drop)]
+# 
+# 
+# vars_to_drop <- c(
+#   'pass_Cmp.1',
+#   'poss_Rec',
+#   "pass_Cmp",
+#   "pass_Cmp.1",
+#   "pass_Cmp.2",
+#   "pass_Cmp.3",
+#   "poss_Succ%",
+#   "shoot_SoT",
+#   "poss_Tkld%",
+#   "opp_keeper_Stp%",
+#   "opp_def_Tkl%",
+#   "opp_keeper_Saves",
+#   "opp_keeper_PKm",
+#   "opp_keeper_PKsv"
+# )
+# 
+# # Drop more variables
+master2 <- master2[, !(colnames(master2) %in% vars_to_drop)]
+
+print(colnames(master2))
+```
+
+```{r}
+# Convert kept categorical variables to factor
+master2$Day <- as.factor(master2$Day)
+master2$Venue <- as.factor(master2$Venue)
+str(master2)
+
+# split the dataset into training and validation sets
+set.seed(42)
+split_sample <- sample(1:986
+                       ,size=round(986/6) 
+                       ,replace=FALSE 
+                       ,prob=rep(1/986,986)) 
+training <- master2[-split_sample,] # ~83% of data
+validation <- master2[split_sample,] # ~ 17 % of data
+
+# step wise model for variable selection
+step_model <- step(
+  lm(GF ~ 1, data = training),  # Null model
+  scope = list(lower = formula(lm(GF~-1, data = training)), upper = formula(lm(GF ~ ., data = training))),
+  direction = "both"  # Or "forward" / "backward"
+  )
+  
+summary(step_model)
+```
+
+```{r}
+# Call:
+# lm(formula = GF ~ `opp_keeper_Save%` + `shoot_SoT%` + shoot_Sh + 
+#     shoot_PKatt + opp_def_Clr + `opp_def_Mid 3rd` + misc_2CrdY + 
+#     opp_def_Sh + opp_keeper_Att.1 + `opp_def_Att 3rd` + pass_PPA + 
+#     `opp_keeper_Att (GK)` + poss_Succ + opp_def_Err + passtype_TB + 
+#     opp_def_Blocks + `pass_1/3` + poss_PrgDist + passtype_FK + 
+#     poss_CPA + `poss_Mid 3rd` + `misc_Won%` + passtype_CK + misc_PKcon + 
+#     misc_OG + opp_def_Tkl + `opp_keeper_Cmp%`, data = train_data)
+
+
+stepwise_vars_0 <- c(
+  "GF",
+  "opp_keeper_Save%",
+  "shoot_SoT%",
+  "shoot_Sh",
+  "shoot_PKatt",
+  "opp_def_Clr",
+  "opp_def_Mid 3rd",
+  "misc_2CrdY",
+  "opp_def_Sh",
+  "opp_keeper_Att.1",
+  "opp_def_Att 3rd",
+  "pass_PPA",
+  "opp_keeper_Att (GK)",
+  "poss_Succ",
+  "opp_def_Err",
+  "passtype_TB",
+  "opp_def_Blocks",
+  "pass_1/3",
+  "poss_PrgDist",
+  "passtype_FK",
+  "poss_CPA",
+  "poss_Mid 3rd",
+  "misc_Won%",
+  "passtype_CK",
+  "misc_PKcon",
+  "misc_OG",
+  "opp_def_Tkl",
+  "opp_keeper_Cmp%"
+)
+
+# Keep the stepwise selected variables
+train_data <- training[, colnames(master2) %in% stepwise_vars_0, drop = FALSE] #for modeling training set
+val_data <- validation[, colnames(master2) %in% stepwise_vars_0, drop = FALSE] #for modeling validation set
+dataset <- master2[, colnames(master2) %in% stepwise_vars_0, drop = FALSE] #for overall EDA
+
+```
+
+```{r}
+# EDA (Venue and Day Boxplots)
+boxplot(GF ~ Day, data = master2, main = "Goals by Day", xlab = "Day", ylab = "GF")
+boxplot(GF ~ Venue, data = master2, main = "Goals by Venue", xlab = "Venue", ylab = "GF")
+```
+
+
+```{r}
+# Checking to see if Day and Venue should be included in the model
+# We hypothesize that these two variables, despite not being selected by the
+# stepwise regression should be included in the model
+
+# Convert Day to factor
+master2$Day <- as.factor(master2$Day)
+levels(master2$Day)
+
+# ANOVA test to see if Day is significant for predicting Goals Scored
+anova_model <- aov(GF ~ as.factor(Day), data = master2)
+summary(anova_model)
+
+master2$Venue <- as.factor(master2$Venue)
+levels(master2$Venue)
+
+# ANOVA test to see if Venue (Home/Away) is significant for predicting Goals Scored
+anova_model2 <- aov(GF ~ as.factor(Venue), data = master2)
+summary(anova_model2)
+
+TukeyHSD(anova_model)
+TukeyHSD(anova_model2)
+# Day is insignificant, but Venue is.
+```
+
+```{r}
+# Checking the distribution of all the numeric variables
+#his_plots <- list()
+  for (var in setdiff(names(dataset), c("Day", "Venue"))) {
+       hist(dataset[[var]], 
+       main = paste("Histogram of", var),  # Set the title dynamically
+       xlab = var,                         # X-axis label
+       col = "purple",                    # Color of the bars
+       border = "white")                   # Color of the bar borders
+}
+
+#library(gridExtra)
+#grid.arrange(grobs = his_plots, ncol = 2)  # Adjust ncol/nrow as needed
+```
+
+
+```{r}
+# Checking the distribution of all variables (excluding goals)
+# in scatter plot form
+
+for (var in setdiff(names(dataset), c("GF"))) {
+  plot(dataset[[var]], dataset$GF,
+       main = paste("Scatterplot of", var, "vs GF"), 
+       xlab = var,                                    
+       ylab = "GF")                                
+}
+```
+
+
+```{r}
+# Current model based on stepwise regression and EDA
+
+step_model <- lm(GF ~ `opp_keeper_Save%` + `shoot_SoT%` + shoot_Sh + 
+    shoot_PKatt + opp_def_Clr + `opp_def_Mid 3rd` + misc_2CrdY + 
+    opp_def_Sh + opp_keeper_Att.1 + `opp_def_Att 3rd` + pass_PPA + 
+    `opp_keeper_Att (GK)` + poss_Succ + opp_def_Err + passtype_TB + 
+    opp_def_Blocks + `pass_1/3` + poss_PrgDist + passtype_FK + 
+    poss_CPA + `poss_Mid 3rd` + `misc_Won%` + passtype_CK + misc_PKcon + 
+    misc_OG + opp_def_Tkl + `opp_keeper_Cmp%`, data = train_data)
+
+summary(step_model)
+```
+
+
+```{r}
+# Creates a dataframe from the columns used in MLR model step_model
+step_data <- model.frame(step_model)
+
+# Standardize numeric columns (excluding Response) for LASSO
+std_train_data <- step_data %>% mutate(across(where(is.numeric), ~scale(.) %>% as.vector))
+# Confirm standardization
+summary(std_train_data)
+
+library(glmnet)
+
+# Attempting to do a LASSO regression
+X <- model.matrix(GF ~ . - 1, data = std_train_data)
+y <- std_train_data$GF
+
+# Find the optimal lambda using 10-fold CV
+fullmodel.cv=cv.glmnet(X, y, alpha=1, nfolds=10)
+## Fit lasso model with 100 values for lambda
+fullmodel_lasso = glmnet(X, y, alpha = 1, nlambda=100)
+## Extract coefficients at optimal lambda
+coef(fullmodel_lasso, s=fullmodel.cv$lambda.min)
+
+
+# Fit lasso regression
+# plot(fullmodel_lasso,xvar="lambda", lwd=2)
+# abline(v=log(fullmodel.cv$lambda.min), col='black', lty=2)
+
+```
+
+
+
+```{r}
+# Building dataset for Mallow's Cp
+library(dplyr)
+mallows_resp <- train_data$GF
+cols_to_exclude <- c("GF")
+mallows_vars <- train_data %>% dplyr::select(-all_of(cols_to_exclude))
+mallows_mat <- data.matrix(mallows_vars)
+```
+
+
+```{r}
+# Mallow's Cp calculation
+library(leaps)
+
+out <-leaps(mallows_vars, mallows_resp, method = "Cp")
+cbind(as.matrix(out$which),out$Cp)
+
+ 
+best.model = which(out$Cp==min(out$Cp))
+cbind(as.matrix(out$which), out$Cp)[best.model,]
+ 
+best.variables <- names(out$which)[out$which[best.model, ]]
+print(best.variables) # inconclusive
+
+```
+
+
+
+```{r}
+# Trying to reduce the number of predictors by choosing the variables with greater coefficient estimates
+summary(step_model)
+
+reduced_model <- lm(GF ~ `opp_keeper_Save%` + `shoot_SoT%` + shoot_Sh + shoot_PKatt + misc_OG + misc_PKcon + opp_def_Err + poss_Succ+ opp_def_Clr + `opp_def_Mid 3rd` + misc_2CrdY + passtype_FK + pass_PPA + `poss_Mid 3rd`, data = train_data)
+
+summary(reduced_model)
+```
+
+
+```{r}
+# Comparison of Full_model2 and the reduced model above
+anova_result<-anova(reduced_model, step_model)# View the result
+print(anova_result)
+```
+
+```{r}
+library(MASS)
+
+# Assuming full_model is already fitted
+# Example: full_model <- lm(GF ~ ., data = model_data)
+
+# Model matrix
+X <- model.matrix(GF ~ . - 1, data = std_train_data)
+
+# Standardized residuals
+resids <- stdres(step_model)
+
+# Loop through each column of X
+for (var_name in colnames(X)) {
+  plot(X[, var_name], resids,
+       main = paste("Scatterplot of", var_name, "vs Residuals"), 
+       xlab = var_name,                                    
+       ylab = "Residuals",                                
+       col = "skyblue", 
+       pch = 19)
+}
+```
+
+```{r}
+# Residual Analysis
+library(car)
+fits = step_model$fitted
+cook = cooks.distance(step_model)
+par(mfrow =c(2,2))
+plot(fits, resids, xlab="Fitted Values",ylab="Residuals") # fitted values vs standardized residuals plot
+abline(0,0,col="red")
+qqPlot(resids, ylab="Residuals", main = "") # qqplot of standardized residuals
+hist(resids, xlab="Residuals", main = "",nclass=10,col="green") # distribution of standarized residuals
+plot(cook,type="h",lwd=3,col="red", ylab = "Cook's Distance") # cook's distance
+```
+
+```{r}
+# Checking for multicolinearity
+vif(step_model)
+plot(cook,type="h",lwd=3,col="red", ylab = "Cook's Distance")
+```
+
+```{r}
+# Calculate Cook's distance
+cooks <- cooks.distance(step_model)
+
+# Recreate dataframe from the columns used in MLR model step_model
+step_data <- model.frame(step_model)
+
+# Set threshold (e.g., 4/n)
+n <- nrow(step_data)
+threshold <- 4 / n
+
+# Look at outliers
+
+data_subset <- step_data[cooks > threshold, ]
+data_subset
+```
+
+```{r}
+# More Cook's Distance metrics
+cooks <- cooks.distance(step_model)
+
+# Set threshold for Cook's distance (e.g., 4/n)
+threshold <- 4 / nrow(step_data)
+
+# Identify rows to keep (where Cook's distance is below the threshold)
+rows_to_keep <- cooks <= threshold
+
+# Create a new dataset excluding the outliers
+cleaned_data <- step_data[rows_to_keep, ]
+
+# Print a summary to verify the number of rows removed
+cat("Number of outliers removed:", sum(!rows_to_keep), "\n")
+cat("New dataset size:", nrow(cleaned_data), "\n")
+
+# Optionally, refit the model with the cleaned dataset
+full_model2 <- lm(GF ~ `opp_keeper_Save%` + `shoot_SoT%` + shoot_Sh + 
+    shoot_PKatt + opp_def_Clr + `opp_def_Mid 3rd` + misc_2CrdY + 
+    opp_def_Sh + opp_keeper_Att.1 + `opp_def_Att 3rd` + pass_PPA + 
+    `opp_keeper_Att (GK)` + poss_Succ + opp_def_Err + passtype_TB + 
+    opp_def_Blocks + `pass_1/3` + poss_PrgDist + passtype_FK + 
+    poss_CPA + `poss_Mid 3rd` + `misc_Won%` + passtype_CK + misc_PKcon + 
+    misc_OG + opp_def_Tkl + `opp_keeper_Cmp%`, data = cleaned_data) 
+
+summary(full_model2)
+```
+
+
+```{r}
+#Extract the data frame used in the MLR model: full_model2
+model2_data <- model.frame(full_model2)
+
+# Standardize dataset for LASSO regression (second iteration)
+std_model2_data <- model2_data %>% mutate(across(where(is.numeric), ~scale(.) %>% as.vector))
+
+library(glmnet)
+
+# LASSO Regression again
+X <- model.matrix(GF ~ . - 1, data = std_model2_data)
+y <- std_model2_data$GF
+
+# Find the optimal lambda using 10-fold CV
+full_model2_cv <- cv.glmnet(X, y, alpha=1, nfolds=10)
+## Fit lasso model with 100 values for lambda
+fullmodel2_lasso <- glmnet(X, y, alpha = 1, nlambda=100)
+## Extract coefficients at optimal lambda
+coef(fullmodel2_lasso, s=full_model2_cv$lambda.min)
+
+
+
+# Fit lasso regression
+plot(fullmodel2_lasso,xvar="lambda", lwd=2) #all variables are kept once more
+abline(v=log(full_model2_cv$lambda.min), col='black', lty=2)
+
+```
+
+```{r}
+# Prepare another new matrix for Mallows Cp 
+library(dplyr)
+cleaned_resp2 <- cleaned_data$GF
+cols_to_exclude2 <- c("GF")
+cleaned_vars <- cleaned_data %>% dplyr::select(-all_of(cols_to_exclude))
+cleaned_mat <- data.matrix(cleaned_vars)
+
+```
+
+
+```{r}
+# Mallows Cp calculation
+#library(leaps)
+
+out <-leaps(cleaned_mat, cleaned_resp2, method = "Cp")
+cbind(as.matrix(out$which),out$Cp)
+
+ 
+best.model = which(out$Cp==min(out$Cp))
+cbind(as.matrix(out$which), out$Cp)[best.model,]
+ 
+best.variables <- names(out$which)[out$which[best.model, ]]
+print(best.variables)
+# remove the last to variables in the set (post outlier removal)
+##### opp_def_Tkl and opp_keeper_Cmp%
+```
+
+```{r}
+# Chosen variables based Mallow's Cp and LASSO and further discussion
+stepwise_on_cleaned1 <- c(
+  "GF",
+  "opp_keeper_Save%",
+  "shoot_SoT%",
+  "shoot_Sh",
+  "shoot_PKatt",
+  "opp_def_Clr",
+  "opp_def_Mid 3rd",
+  "misc_2CrdY",
+  "opp_def_Sh",
+  "opp_keeper_Att.1",
+  "opp_def_Att 3rd",
+  "pass_PPA",
+  "opp_keeper_Att (GK)",
+  "poss_Succ",
+  "opp_def_Err",
+  "passtype_TB",
+  "opp_def_Blocks",
+  "pass_1/3",
+  "poss_PrgDist",
+  "poss_CPA",
+  "poss_Mid 3rd",
+  "misc_Won%",
+  "misc_PKcon",
+  "misc_OG"
+)
+
+# Trim columns for both training and validation
+train_data2 <- cleaned_data[, colnames(cleaned_data) %in% stepwise_on_cleaned1, drop = FALSE] #for modeling training set
+val_data2 <- val_data %>% dplyr::select(all_of(stepwise_on_cleaned1))
+
+# Check that all columns are the same
+names(train_data2)==names(val_data2)
+```
+
+```{r}
+#Final MLR model
+
+full_model3 <- lm(GF ~ `opp_keeper_Save%` + `shoot_SoT%` + shoot_Sh + 
+    shoot_PKatt + opp_def_Clr + `opp_def_Mid 3rd` + misc_2CrdY + 
+    opp_def_Sh + opp_keeper_Att.1 + `opp_def_Att 3rd` + pass_PPA + 
+    `opp_keeper_Att (GK)` + poss_Succ + opp_def_Err + passtype_TB + 
+    opp_def_Blocks + `pass_1/3` + poss_PrgDist + 
+    poss_CPA + `poss_Mid 3rd` + `misc_Won%` + misc_PKcon + 
+    misc_OG, data = train_data2)
+
+summary(full_model3)
+```
+
+
+```{r}
+# Extract data frame used to create model
+model_data3 <- model.frame(full_model3)
+
+library(MASS)
+
+# Assuming full_model is already fitted
+# Example: full_model <- lm(GF ~ ., data = model_data)
+
+# Model matrix
+X <- model.matrix(GF ~ . - 1, data = model_data3)
+
+# Standardized residuals
+resids3 <- stdres(full_model3)
+
+# Loop through each column of X
+for (var_name in colnames(X)) {
+  plot(X[, var_name], resids3,
+       main = paste("Scatterplot of", var_name, "vs Standardized Residuals"), 
+       xlab = var_name,                                    
+       ylab = "Residuals",                                
+       col = "skyblue", 
+       pch = 19)
+}
+
+```
+
+
+```{r}
+# Residual Analysis of final MLR model
+library(car)
+fits3 = full_model3$fitted
+cook3 = cooks.distance(full_model3)
+#par(mfrow =c(2,2))
+plot(fits3, resids3, xlab="Fitted Values",ylab="Standardized Residuals") # Fitted vs Residual plot
+abline(0,0,col="red")
+qqPlot(resids3, ylab="Standarized Residuals", main = "") # qqPlot of Standardized residuals
+hist(resids3, xlab="Standardized Residuals", main = "",nclass=10,col="green") # checking the distribution of the residuals
+plot(cook3,type="h",lwd=3,col="red", ylab = "Cook's Distance") # plotting Cook's distance
+```
+
+
+```{r}
+# Re-checking multicolinearity
+vif(full_model3)
+#plot(cook,type="h",lwd=3,col="red", ylab = "Cook's Distance")
+```
+
+
+
+```{r}
+# Testing a Poisson regression
+## Explain why Poisson
+
+full_model4 <- glm(GF ~ `opp_keeper_Save%` + `shoot_SoT%` + offset(log(shoot_Sh)) + 
+    shoot_PKatt + opp_def_Clr + `opp_def_Mid 3rd` + misc_2CrdY + 
+    opp_def_Sh + opp_keeper_Att.1 + `opp_def_Att 3rd` + pass_PPA + 
+    `opp_keeper_Att (GK)` + poss_Succ + opp_def_Err + passtype_TB + 
+    opp_def_Blocks + `pass_1/3` + poss_PrgDist + 
+    poss_CPA + `poss_Mid 3rd` + `misc_Won%` + misc_PKcon + 
+    misc_OG, data = train_data2, family = poisson)
+
+summary(full_model4)
+```
+
+
+```{r}
+# Checking for model significance
+1-pchisq((841.77-203.63),(766-744))
+# Model is significant
+```
+
+
+
+```{r}
+# Performing Wald's test on the first 5 terms
+library(aod)
+wald.test(b=coef(full_model4), Sigma=vcov(full_model4), Terms=6:23)
+
+# Chi-squared test results in a p-value of 0.95 which indicates there is no significant evidence to reject the null
+# hypothesist that the coefficients for predictors 6 to 23 are all zero. i.e. these predictors do not significantly contribute explaining the variance of the dependent variable
+```
+
+```{r}
+# Reduced Possion model using the first 5 terms
+reduced_poisson <- glm(GF ~ `opp_keeper_Save%` + `shoot_SoT%` + offset(log(shoot_Sh)) + 
+    shoot_PKatt + opp_def_Clr, data=train_data2, family="poisson")
+
+summary(reduced_poisson)
+```
+
+
+```{r}
+# Histogram
+dev_resids <- residuals(reduced_poisson, type="deviance")
+
+hist(dev_resids
+     ,nclass=20
+     ,col="blue"
+     ,border = "gold"
+     ,main="Histogram of Deviance Residuals")
+
+# q-q plot - deviance residuals
+qqnorm(dev_resids
+       ,col="blue"
+       ,main = "QQ Plot of Deviance Residuals")
+qqline(dev_resids
+       ,col = "red")
+
+# q-q plot - pearson residuals to check of over/underdispersion
+pear_resids <- residuals(reduced_poisson, type="pearson")
+qqnorm(pear_resids, main="QQ Plot of Pearson Residuals", col="blue")
+qqline(pear_resids, col="red")
+
+# Deviance residuals vs fitted values
+plot(reduced_poisson$fitted, dev_resids
+     ,xlab = "Fitted Values"
+     ,ylab = "Deviance Residuals"
+     ,main = "Deviance Residuals vs Fitted Values")
+
+# Mathematical check for over/underdispersion
+wdf <- reduced_poisson$df.residual # n-p-1
+dev <- reduced_poisson$deviance
+overdisp <- dev/wdf
+overdisp
+# Our overdispersion value is much less than 1, this suggests underdispersion as opposed to overdispersion
+# Within our data context, this is expected since professional soccer teams may not be far apart from one
+# another in terms of performance.
+
+# GOF Test
+with(reduced_poisson, cbind(res.deviance = deviance, df = df.residual,
+ p = pchisq(deviance, df.residual, lower.tail = FALSE)))
+
+pear_tval <- sum(pear_resids^2)
+
+cbind(pear_tval, p = pchisq(pear_tval, reduced_poisson$df.residual,lower.tail = FALSE))
+```
+
+
+```{r}
+# Poisson Goodness-of-Fit Analysis (Full Model)
+
+# Histogram
+dev_resids_full <- residuals(full_model4, type="deviance")
+
+hist(dev_resids_full
+     ,nclass=20
+     ,col="blue"
+     ,border = "gold"
+     ,main="Histogram of Deviance Residuals")
+
+# q-q plot - deviance residuals
+qqnorm(dev_resids_full
+       ,col="blue"
+       ,main = "QQ Plot of Deviance Residuals")
+qqline(dev_resids_full
+       ,col = "red")
+
+# q-q plot - pearson residuals to check of over/underdispersion
+pear_resids_full <- residuals(full_model4, type="pearson")
+qqnorm(pear_resids_full, main="QQ Plot of Pearson Residuals", col="blue")
+qqline(pear_resids_full, col="red")
+
+# Deviance residuals vs fitted values
+plot(full_model4$fitted, dev_resids_full
+     ,xlab = "Fitted Values"
+     ,ylab = "Deviance Residuals"
+     ,main = "Deviance Residuals vs Fitted Values")
+
+# Mathematical check for over/underdispersion
+wdf_full <- full_model4$df.residual # n-p-1
+dev_full <- full_model4$deviance
+overdisp_full <- dev_full/wdf_full
+overdisp_full
+# Our overdispersion value is much less than 1, this suggests underdispersion as opposed to overdispersion
+# Within our data context, this is expected since professional soccer teams may not be far apart from one
+# another in terms of performance.
+
+# GOF Test
+with(full_model4, cbind(res.deviance = deviance, df = df.residual,
+ p = pchisq(deviance, df.residual, lower.tail = FALSE)))
+
+pear_tval_full <- sum(pear_resids_full^2)
+
+cbind(pear_tval_full, p = pchisq(pear_tval, full_model4$df.residual,lower.tail = FALSE))
+
+# Since the p-value is 1, we reject the null hypothesis so that the model is a good fit
+```
+
+
+```{r}
+# Predicting on Validation Set 
+
+# Predictor dataset
+val_data2_noresp <- val_data2 %>% dplyr::select(-GF)
+# Response column
+val_resp <- val_data2$GF
+```
+
+
+```{r}
+# Prediction Accuracy Measures
+# Mean Squared Prediction Error
+mspe_fun <- function(pred, dat){mean((pred - dat)^2)}
+
+# Mean absolute Percentage error cannot be used as some goals are 0
+#mape_fun <- function(pred,dat){mean(abs(pred-dat)/abs(dat))}
+
+# Mean absolute error
+mae_fun <- function(pred,dat){mean(abs(pred-dat))}
+
+# Precision Measure
+pm_fun <- function(pred,dat){sum((pred-dat)^2)/sum((dat-mean(dat))^2)}
+
+# Aggregate Prediction Function
+pred_fun2 <- function(model, test) {
+  pred = predict(model,test, type="response")
+  test.pred = pred
+  mspe_model = mspe_fun(test.pred,test$GF)
+  mae_model = mae_fun(test.pred, test$GF)
+  #mape_model = mape_fun(test.pred, val_resp)
+  pm_model = pm_fun(test.pred, test$GF)
+  pred_measures = c(mspe_model, mae_model, pm_model)
+  return(pred_measures)
+}
+
+# Aggregate Prediction Function
+pred_fun <- function(model, test, resp) {
+  pred = predict(model,test)
+  test.pred = pred
+  mspe_model = mspe_fun(test.pred,resp)
+  mae_model = mae_fun(test.pred, resp)
+  #mape_model = mape_fun(test.pred, val_resp)
+  pm_model = pm_fun(test.pred, resp)
+  pred_measures = c(mspe_model, mae_model, pm_model)
+  return(pred_measures)
+  }
+```
+
+```{r}
+# Accuracy measures for 1 iteration (Poisson Regression)
+# Full Poisson
+pred_fun(full_model4, val_data2_noresp, val_resp)
+# Full MLR
+pred_fun(full_model3, val_data2_noresp, val_resp)
+# Reduced Poisson
+pred_fun(reduced_poisson,val_data2_noresp, val_resp)
+```
+
+```{r}
+# Accuracy measures for 1 iteration (Poisson Regression)
+# Full Poisson
+pred_fun2 (full_model4, val_data2)
+# Full MLR
+pred_fun2(full_model3, val_data2)
+#Reduced Poission
+pred_fun2(reduced_poisson, val_data2)
+```
+
+```{r}
+# Reduced Poisson Model Prediction Accuracy (100 iterations)
+red_pred_1_meas = matrix(0,3,100)
+final_clean <- master %>% dplyr::select(all_of(stepwise_on_cleaned1)) %>% mutate_if(is.numeric, ~replace_na(., 0))
+
+set.seed(85)
+for(i in 1:100){
+  sample_size = floor(0.8*nrow(final_clean))
+  picked = sample(seq_len(nrow(final_clean)),size=sample_size)
+  train = final_clean[picked,]
+  val = final_clean[-picked,]
+  red_poisson_train = glm(GF ~ `opp_keeper_Save%` + `shoot_SoT%` + offset(log(shoot_Sh)) + 
+    shoot_PKatt + opp_def_Clr, data=train, family="poisson")
+  red_pred_1_meas[,i] = pred_fun2(red_poisson_train,val)
+}
+
+# Poisson MSPE, MAE, PM Median 
+red_poisson_model_median= round(apply(red_pred_1_meas,1,median),4)
+
+# Poisson MSPE, MAE, PM Average
+red_poisson_model_average= round(apply(red_pred_1_meas,1,mean),4)
+
+
+red_poisson_model_median
+red_poisson_model_average
+```
+
+
+```{r}
+# Poisson Model Prediction Accuracy (100 iterations)
+pred_1_meas = matrix(0,3,100)
+final_clean <- master %>% dplyr::select(all_of(stepwise_on_cleaned1)) %>% mutate_if(is.numeric, ~replace_na(., 0))
+
+set.seed(85)
+for(i in 1:100){
+  sample_size = floor(0.8*nrow(final_clean))
+  picked = sample(seq_len(nrow(final_clean)),size=sample_size)
+  train = final_clean[picked,]
+  val = final_clean[-picked,]
+  poisson_train = glm(GF~., data=train, family="poisson")
+  pred_1_meas[,i] = pred_fun2(poisson_train,val)
+}
+
+# Poisson MSPE, MAE, PM Median 
+poisson_model_median= round(apply(pred_1_meas,1,median),4)
+
+# Poisson MSPE, MAE, PM Average
+poisson_model_average= round(apply(pred_1_meas,1,mean),4)
+poisson_model_median
+poisson_model_average
+```
+
+```{r}
+# Final MLR Model Prediction Accuracy (100 iterations)
+pred_1_meas2 = matrix(0,3,100)
+final_clean <- master %>% dplyr::select(all_of(stepwise_on_cleaned1)) %>% mutate_if(is.numeric, ~replace_na(., 0))
+
+set.seed(85)
+for(i in 1:100){
+  sample_size = floor(0.8*nrow(final_clean))
+  picked = sample(seq_len(nrow(final_clean)),size=sample_size)
+  train = final_clean[picked,]
+  val = final_clean[-picked,]
+  mlr_train = lm(GF~., data=train)
+  pred_1_meas2[,i] = pred_fun2(mlr_train,val)
+}
+
+# MLR MSPE, MAE, PM Median 
+mlr_model_median = round(apply(pred_1_meas2,1,median),4)
+
+# MLR MSPE, MAE, PM Average
+mlr_model_average= round(apply(pred_1_meas2,1,mean),4)
+mlr_model_median
+mlr_model_average
+```
+
+```{r}
+# Import Final Test set
+# Round 1 Playoffs
+library(readxl)
+
+test_set <- read_excel("Round_One_MLS.xlsx")
+test_set_match <- test_set %>% dplyr::select(c(Team, Date, Time, Round, Day, GF))
+
+test_set_pred <- test_set %>% dplyr::select(all_of(stepwise_on_cleaned1)) %>% mutate_if(is.numeric, ~replace_na(., 0))
+test_set_resp <- test_set$GF
+
+
+#Code prior to check of Reduced Poisson:
+# Poisson was the chosen model
+poisson_predictions <- predict(full_model4, test_set_pred, type="response")
+
+plot(test_set$GF, poisson_predictions)
+
+# We have one outlier, this is due to a team scoring 2 own goals, resulting in a negative save percentage
+# which was not considered in data preprocessing
+cbind(test_set, poisson_predictions) %>% filter(poisson_predictions >= 13)
+
+cbind(test_set, poisson_predictions) %>% filter(Team == "los-angeles-fc")
+```
+
+```{r}
+# Reduced Poisson 
+
+# Reduced Poisson was the chosen model
+reduced_poisson_predictions <- predict(reduced_poisson, test_set_pred, type="response")
+
+plot(test_set$GF, reduced_poisson_predictions)
+
+plot(test_set$GF,test_set$xG)
+
+cbind(test_set, reduced_poisson_predictions) %>% filter(reduced_poisson_predictions >= 12)
+
+cbind(test_set, reduced_poisson_predictions) %>% filter(Team == "los-angeles-fc")
+
+#write.csv(cbind(test_set, reduced_poisson_predictions), 'reduced_predict.csv')
+```
+
+```{r}
+#Technically Illegal - Poisson remains chosen model
+# MLR 
+
+# Poisson was the chosen model
+MLR_predictions <- predict(full_model3, test_set_pred, type="response")
+
+plot(test_set$GF, MLR_predictions)
+
+#cbind(test_set, MLR_predictions %>% filter(reduced_poisson_predictions >= 12)
+
+cbind(test_set, MLR_predictions) %>% filter(Team == "los-angeles-fc")
+```
+
